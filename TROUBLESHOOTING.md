@@ -146,6 +146,44 @@ On GNOME and KDE, the first automatic paste can show a remote-interaction permis
 
 **Symptoms:** Meeting detection not working, no transcription, audio not captured
 
+**KDE + Outlook Web meeting titles:**
+
+OpenWhispr can use an Outlook Web reminder from Microsoft Edge as local title
+context without connecting to Microsoft Graph. Enable Outlook Web desktop
+notifications and keep OpenWhispr running when the reminder appears. While
+meeting-detection notifications are enabled, OpenWhispr watches the local KDE
+notification call, accepts reminders from `outlook.office.com` whose body is
+a standalone meeting start time (such as `16:00`, `Starts at 16:00`, or a time
+range beginning with `16:00`), and keeps the sanitized title in memory.
+
+The title can be used from 30 minutes before until 60 minutes after the reminder's
+scheduled time. A meeting that has already started takes precedence over an
+upcoming one, and the most recently displayed reminder wins when multiple
+started meetings overlap. After OpenWhispr successfully creates the meeting
+note, that reminder is consumed so it cannot name a later meeting. Connected
+calendar titles still take precedence.
+
+The monitor watches both the direct KDE notification API and the desktop portal.
+Portal notifications are used only when they positively identify both Microsoft
+Edge and Outlook; otherwise they are ignored to avoid using a notification from
+another website. The monitor reconnects after system resume while preserving
+still-eligible reminders.
+
+With debug logging enabled, look for these messages:
+
+- `Outlook notification title monitor started`: D-Bus monitoring is active.
+- `Outlook meeting notification context cached`: a reminder was accepted.
+- `Outlook notification message rejected`: a matching transport was seen, with
+  a privacy-safe reason such as `wrong-origin`, `missing-start-time`, or
+  `unattributed-portal`.
+- `Outlook meeting notification candidate selection`: reports whether a
+  started, upcoming, or no candidate was selected.
+
+These diagnostics never include the notification title, body, ID, or URL. If
+D-Bus monitoring is unavailable or denied (which can happen in a Flatpak
+sandbox), meeting detection continues normally and the note falls back to
+`New note`.
+
 **macOS:**
 
 1. Grant Screen Recording permission: System Settings → Privacy & Security → Screen Recording → enable OpenWhispr
