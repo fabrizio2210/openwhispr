@@ -138,6 +138,29 @@ test("before renderer prefs arrive, checks keep today's check-by-default behavio
   manager.cleanup();
 });
 
+test("automatic checks wait for explicit renderer preference synchronization", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const autoUpdater = makeAutoUpdater();
+  const manager = createUpdateManager(autoUpdater);
+  const windowManager = {
+    notificationPreferencesSynchronized: false,
+    notificationPrefs: { notificationsEnabled: true, notifyUpdates: true },
+  };
+  manager.setWindowManager(windowManager);
+
+  manager.checkForUpdatesOnStartup();
+  t.mock.timers.tick(STARTUP_DELAY_MS + PERIODIC_INTERVAL_MS);
+  assert.equal(autoUpdater.calls, 0, "no automatic timer runs against default preferences");
+
+  manager.handleNotificationPreferencesSynchronized();
+  t.mock.timers.tick(STARTUP_DELAY_MS);
+  assert.equal(autoUpdater.calls, 1, "startup check runs after synchronization");
+  t.mock.timers.tick(PERIODIC_INTERVAL_MS);
+  assert.equal(autoUpdater.calls, 2, "periodic checks are scheduled after synchronization");
+
+  manager.cleanup();
+});
+
 test("a manual Check for Updates is never gated by the toggle", async () => {
   const autoUpdater = makeAutoUpdater();
   const manager = createUpdateManager(autoUpdater);

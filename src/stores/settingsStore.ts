@@ -15,6 +15,16 @@ import type { CalendarAccount } from "../types/calendar";
 import { PROMPT_KIND_LIST, type PromptKind } from "../config/prompts/registry";
 import { sweepRetiredPromptOverrides } from "../config/retiredPrompts";
 import {
+  NOTIFICATION_PREFERENCE_KEYS,
+  createNotificationPreferenceSnapshot,
+  readNotificationPreferenceState,
+  resolveNotificationPreferenceKey,
+  writeNotificationPreference,
+  type NotificationPreferenceCompatibilityKey,
+  type NotificationPreferenceKey,
+  type NotificationPreferenceValues,
+} from "../config/notificationPreferences";
+import {
   deriveReasoningMode,
   buildReasoningScopePatches,
   inheritsFallbackEndpoint,
@@ -277,10 +287,7 @@ const BOOLEAN_SETTINGS = new Set([
   "dictationAgentVisionDisableThinking",
   "noteFormattingDisableThinking",
   "chatAgentDisableThinking",
-  "notificationsEnabled",
-  "notifyMeetingDetection",
-  "notifyCalendarReminders",
-  "notifyUpdates",
+  ...NOTIFICATION_PREFERENCE_KEYS,
   "gcalPrimaryOnly",
   "mcalPrimaryOnly",
   "appleCalendarConnected",
@@ -592,7 +599,8 @@ export interface SettingsState
     ApiKeySettings,
     PrivacySettings,
     ThemeSettings,
-    ChatAgentSettings {
+    ChatAgentSettings,
+    NotificationPreferenceValues {
   isSignedIn: boolean;
   audioCuesEnabled: boolean;
   pauseMediaOnDictation: boolean;
@@ -603,10 +611,6 @@ export interface SettingsState
   gcalEmail: string;
   mcalAccounts: CalendarAccount[];
   mcalConnected: boolean;
-  notificationsEnabled: boolean;
-  notifyMeetingDetection: boolean;
-  notifyCalendarReminders: boolean;
-  notifyUpdates: boolean;
   gcalPrimaryOnly: boolean;
   mcalPrimaryOnly: boolean;
   appleCalendarConnected: boolean;
@@ -906,6 +910,7 @@ export interface SettingsState
   setNotifyMeetingDetection: (value: boolean) => void;
   setNotifyCalendarReminders: (value: boolean) => void;
   setNotifyUpdates: (value: boolean) => void;
+  setNotificationPreference: (key: NotificationPreferenceKey, value: boolean) => boolean;
   setGcalPrimaryOnly: (value: boolean) => void;
   setMcalPrimaryOnly: (value: boolean) => void;
   setAppleCalendarConnected: (value: boolean) => void;
@@ -983,6 +988,19 @@ function createBooleanSetter(key: string) {
   return (value: boolean) => {
     if (isBrowser) localStorage.setItem(key, String(value));
     useSettingsStore.setState({ [key]: value });
+  };
+}
+
+function setNotificationPreference(key: NotificationPreferenceKey, value: boolean): boolean {
+  if (!writeNotificationPreference(isBrowser ? localStorage : null, key, value)) return false;
+  useSettingsStore.setState({ [key]: value });
+  return true;
+}
+
+function createNotificationPreferenceSetter(key: NotificationPreferenceCompatibilityKey) {
+  return (value: boolean) => {
+    const canonicalKey = resolveNotificationPreferenceKey(key);
+    if (canonicalKey) setNotificationPreference(canonicalKey, value);
   };
 }
 
@@ -1301,10 +1319,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   pauseMediaOnDictation: readBoolean("pauseMediaOnDictation", false),
   floatingIconAutoHide: readBoolean("floatingIconAutoHide", false),
   startMinimized: readBoolean("startMinimized", false),
-  notificationsEnabled: readBoolean("notificationsEnabled", true),
-  notifyMeetingDetection: readBoolean("notifyMeetingDetection", true),
-  notifyCalendarReminders: readBoolean("notifyCalendarReminders", true),
-  notifyUpdates: readBoolean("notifyUpdates", true),
+  ...readNotificationPreferenceState(isBrowser ? localStorage : null),
   ...(() => {
     let accounts: CalendarAccount[] = [];
     try {
@@ -2079,10 +2094,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
       mcalConnected: accounts.length > 0,
     });
   },
-  setNotificationsEnabled: createBooleanSetter("notificationsEnabled"),
-  setNotifyMeetingDetection: createBooleanSetter("notifyMeetingDetection"),
-  setNotifyCalendarReminders: createBooleanSetter("notifyCalendarReminders"),
-  setNotifyUpdates: createBooleanSetter("notifyUpdates"),
+  setNotificationsEnabled: createNotificationPreferenceSetter("notificationsEnabled"),
+  setNotifyMeetingDetection: createNotificationPreferenceSetter("notifyMeetingDetection"),
+  setNotifyCalendarReminders: createNotificationPreferenceSetter("notifyCalendarReminders"),
+  setNotifyUpdates: createNotificationPreferenceSetter("notifyUpdates"),
+  setNotificationPreference,
   setGcalPrimaryOnly: (value: boolean) => {
     if (isBrowser) localStorage.setItem("gcalPrimaryOnly", String(value));
     useSettingsStore.setState({ gcalPrimaryOnly: value });
@@ -2379,6 +2395,39 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
       s.setChatAgentCloudMode(settings.chatAgentCloudMode);
   },
 }));
+
+if (isBrowser) {
+  let previousNotificationSnapshot = createNotificationPreferenceSnapshot(
+    useSettingsStore.getState()
+  );
+  useSettingsStore.subscribe((state) => {
+    const nextNotificationSnapshot = createNotificationPreferenceSnapshot(state);
+    const unchanged = Object.entries(nextNotificationSnapshot).every(
+      ([key, value]) => previousNotificationSnapshot[key] === value
+    );
+    if (unchanged) return;
+
+    previousNotificationSnapshot = nextNotificationSnapshot;
+    void window.electronAPI
+      ?.syncNotificationPreferences?.(nextNotificationSnapshot)
+      .then((result) => {
+        if (result?.success !== true) {
+          logger.warn(
+            "Main process rejected notification preferences",
+            { error: result?.error ?? "No response" },
+            "settings"
+          );
+        }
+      })
+      .catch((err: Error) => {
+        logger.warn(
+          "Failed to sync changed notification preferences",
+          { error: err.message },
+          "settings"
+        );
+      });
+  });
+}
 
 // --- Selectors (derived state, not stored) ---
 
@@ -3180,12 +3229,12 @@ export async function initializeSettings(): Promise<void> {
 
     try {
       const currentState = useSettingsStore.getState();
-      await window.electronAPI.syncNotificationPreferences?.({
-        notificationsEnabled: currentState.notificationsEnabled,
-        notifyMeetingDetection: currentState.notifyMeetingDetection,
-        notifyCalendarReminders: currentState.notifyCalendarReminders,
-        notifyUpdates: currentState.notifyUpdates,
-      });
+      const result = await window.electronAPI.syncNotificationPreferences?.(
+        createNotificationPreferenceSnapshot(currentState)
+      );
+      if (result?.success !== true) {
+        throw new Error(result?.error ?? "Notification preference sync is unavailable");
+      }
     } catch (err) {
       logger.warn(
         "Failed to sync notification preferences on startup",

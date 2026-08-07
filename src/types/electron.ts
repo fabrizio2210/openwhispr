@@ -2568,8 +2568,8 @@ declare global {
         prefs: Record<string, boolean>
       ) => Promise<{ success: boolean }>;
       syncNotificationPreferences?: (
-        prefs: Record<string, boolean>
-      ) => Promise<{ success: boolean }>;
+        prefs: Record<string, boolean | number>
+      ) => Promise<{ success: boolean; error?: string }>;
       setSpeakerDiarizationEnabled?: (
         enabled: boolean
       ) => Promise<{ success: boolean; error?: string }>;

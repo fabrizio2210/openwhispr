@@ -1222,15 +1222,6 @@ export default function SettingsPage({
     readAutoStartState().finally(() => setAutoStartLoading(false));
   }, [readAutoStartState]);
 
-  useEffect(() => {
-    window.electronAPI?.syncNotificationPreferences?.({
-      notificationsEnabled,
-      notifyMeetingDetection,
-      notifyCalendarReminders,
-      notifyUpdates,
-    });
-  }, [notificationsEnabled, notifyMeetingDetection, notifyCalendarReminders, notifyUpdates]);
-
   const handleAutoStartChange = async (enabled: boolean) => {
     if (!window.electronAPI?.setAutoStartEnabled) return;
     try {

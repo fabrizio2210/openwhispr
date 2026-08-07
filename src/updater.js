@@ -12,14 +12,38 @@ class UpdateManager {
     this.handleBeforeQuitForUpdate = null;
     this.eventListeners = [];
     this.updateCheckInterval = null;
+    this.startupCheckTimer = null;
     this.windowManager = null;
     this._suppressNotification = false;
+    this._automaticChecksRequested = false;
+    this._automaticChecksStarted = false;
+    this._pendingUpdateNotification = null;
 
     this.setupAutoUpdater();
   }
 
   setWindowManager(windowManager) {
     this.windowManager = windowManager;
+  }
+
+  _notificationPreferencesReady() {
+    return this.windowManager?.notificationPreferencesSynchronized !== false;
+  }
+
+  _showUpdateNotificationIfAllowed(info) {
+    if (
+      !this.windowManager ||
+      !info ||
+      !this._notificationPreferencesReady() ||
+      !appUpdatesEnabled(this.windowManager.notificationPrefs)
+    ) {
+      return false;
+    }
+
+    this.windowManager.showUpdateNotification(info).catch((err) => {
+      console.error("Failed to show update notification:", err);
+    });
+    return true;
   }
 
   setupAutoUpdater() {
@@ -87,17 +111,17 @@ class UpdateManager {
           };
         }
         this.notifyRenderers("update-available", info);
-        const notifAllowed = appUpdatesEnabled(this.windowManager?.notificationPrefs);
-        if (this.windowManager && info && !this._suppressNotification && notifAllowed) {
-          this.windowManager.showUpdateNotification(info).catch((err) => {
-            console.error("Failed to show update notification:", err);
-          });
+        if (!this._suppressNotification && !this._showUpdateNotificationIfAllowed(info)) {
+          if (this.windowManager?.notificationPreferencesSynchronized === false && info) {
+            this._pendingUpdateNotification = info;
+          }
         }
         this._suppressNotification = false;
       },
       "update-not-available": (info) => {
         this.updateAvailable = false;
         this._suppressNotification = false;
+        this._pendingUpdateNotification = null;
         if (!this.updateDownloaded) {
           this.isDownloading = false;
           this.lastUpdateInfo = null;
@@ -107,6 +131,7 @@ class UpdateManager {
       error: (err) => {
         console.error("❌ Auto-updater error:", err);
         this._suppressNotification = false;
+        this._pendingUpdateNotification = null;
         this.isDownloading = false;
         this.notifyRenderers("update-error", err);
       },
@@ -119,6 +144,7 @@ class UpdateManager {
       "update-downloaded": (info) => {
         console.log("✅ Update downloaded successfully:", info?.version);
         this.updateDownloaded = true;
+        this._pendingUpdateNotification = null;
         this.isDownloading = false;
         if (info) {
           this.lastUpdateInfo = {
@@ -313,24 +339,55 @@ class UpdateManager {
     });
   }
 
-  checkForUpdatesOnStartup() {
-    if (process.env.NODE_ENV !== "development") {
-      setTimeout(() => {
-        this._autoCheckForUpdates("Startup");
-      }, 3000);
+  _startAutomaticChecks() {
+    if (this._automaticChecksStarted || process.env.NODE_ENV === "development") return;
+    this._automaticChecksStarted = true;
 
-      const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
-      this.updateCheckInterval = setInterval(() => {
-        this._autoCheckForUpdates("Periodic");
-      }, FOUR_HOURS_MS);
+    this.startupCheckTimer = setTimeout(() => {
+      this.startupCheckTimer = null;
+      this._autoCheckForUpdates("Startup");
+    }, 3000);
+
+    const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+    this.updateCheckInterval = setInterval(() => {
+      this._autoCheckForUpdates("Periodic");
+    }, FOUR_HOURS_MS);
+  }
+
+  handleNotificationPreferencesSynchronized() {
+    if (this.windowManager) {
+      this.windowManager.notificationPreferencesSynchronized = true;
+    }
+
+    const pendingNotification = this._pendingUpdateNotification;
+    this._pendingUpdateNotification = null;
+    if (pendingNotification) {
+      this._showUpdateNotificationIfAllowed(pendingNotification);
+    }
+
+    if (this._automaticChecksRequested) {
+      this._startAutomaticChecks();
     }
   }
 
+  checkForUpdatesOnStartup() {
+    if (process.env.NODE_ENV === "development") return;
+    this._automaticChecksRequested = true;
+    if (this._notificationPreferencesReady()) this._startAutomaticChecks();
+  }
+
   cleanup() {
+    if (this.startupCheckTimer) {
+      clearTimeout(this.startupCheckTimer);
+      this.startupCheckTimer = null;
+    }
     if (this.updateCheckInterval) {
       clearInterval(this.updateCheckInterval);
       this.updateCheckInterval = null;
     }
+    this._automaticChecksRequested = false;
+    this._automaticChecksStarted = false;
+    this._pendingUpdateNotification = null;
     this.eventListeners.forEach(({ event, handler }) => {
       autoUpdater.removeListener(event, handler);
     });

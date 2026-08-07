@@ -11,6 +11,7 @@ import type {
 import type { Snippet } from "../utils/snippets";
 import { effectiveAudioRetentionDays } from "../stores/policyRules";
 import { usePolicyStore } from "../stores/policyStore";
+import { readNotificationPreferenceValue } from "../config/notificationPreferences";
 
 export interface TranscriptionSettings {
   uiLanguage: string;
@@ -336,13 +337,13 @@ function useSettingsInternal() {
     setTheme: store.setTheme,
     activationMode: store.activationMode,
     setActivationMode: store.setActivationMode,
-    notificationsEnabled: store.notificationsEnabled,
+    notificationsEnabled: readNotificationPreferenceValue(store, "notificationsEnabled"),
     setNotificationsEnabled: store.setNotificationsEnabled,
-    notifyMeetingDetection: store.notifyMeetingDetection,
+    notifyMeetingDetection: readNotificationPreferenceValue(store, "notifyMeetingDetection"),
     setNotifyMeetingDetection: store.setNotifyMeetingDetection,
-    notifyCalendarReminders: store.notifyCalendarReminders,
+    notifyCalendarReminders: readNotificationPreferenceValue(store, "notifyCalendarReminders"),
     setNotifyCalendarReminders: store.setNotifyCalendarReminders,
-    notifyUpdates: store.notifyUpdates,
+    notifyUpdates: readNotificationPreferenceValue(store, "notifyUpdates"),
     setNotifyUpdates: store.setNotifyUpdates,
     audioCuesEnabled: store.audioCuesEnabled,
     setAudioCuesEnabled: store.setAudioCuesEnabled,

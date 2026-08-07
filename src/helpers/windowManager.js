@@ -10,6 +10,7 @@ const { i18nMain } = require("./i18nMain");
 const { NotificationDismissTimer, getNotificationTimeoutMs } = require("./notificationTimer");
 const { DEV_SERVER_PORT } = DevServerManager;
 const AUTO_END_NOTIFICATION_LOAD_TIMEOUT_MS = 10_000;
+const { createDefaultNotificationPreferences } = require("./meetingNotificationPreferences");
 const {
   MAIN_WINDOW_CONFIG,
   CONTROL_PANEL_CONFIG,
@@ -38,12 +39,8 @@ class WindowManager {
     this.transcriptionPreviewWindow = null;
     this.updateNotificationWindow = null;
     this._updateNotificationDismissed = false;
-    this.notificationPrefs = {
-      notificationsEnabled: true,
-      notifyMeetingDetection: true,
-      notifyCalendarReminders: true,
-      notifyUpdates: true,
-    };
+    this.notificationPrefs = createDefaultNotificationPreferences();
+    this.notificationPreferencesSynchronized = false;
     this.tray = null;
     this.hotkeyManager = new HotkeyManager();
     this.dragManager = new DragManager();
