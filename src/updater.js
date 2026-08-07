@@ -1,4 +1,8 @@
 const { autoUpdater } = require("electron-updater");
+const {
+  getNotificationPreferenceKeysForSource,
+  NOTIFICATION_SOURCES,
+} = require("./helpers/meetingNotificationPreferences");
 
 class UpdateManager {
   constructor() {
@@ -87,8 +91,12 @@ class UpdateManager {
         }
         this.notifyRenderers("update-available", info);
         const nPrefs = this.windowManager?.notificationPrefs || {};
+        const updatePreferenceKeys = getNotificationPreferenceKeysForSource(
+          NOTIFICATION_SOURCES.UPDATES
+        );
         const notifAllowed =
-          nPrefs.notificationsEnabled !== false && nPrefs.notifyUpdates !== false;
+          updatePreferenceKeys !== null &&
+          updatePreferenceKeys.every((key) => nPrefs[key] !== false);
         if (this.windowManager && info && !this._suppressNotification && notifAllowed) {
           this.windowManager.showUpdateNotification(info).catch((err) => {
             console.error("Failed to show update notification:", err);

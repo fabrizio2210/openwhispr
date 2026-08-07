@@ -105,13 +105,18 @@ OpenWhispr is an Electron-based desktop dictation application that uses whisper.
   - Gates notifications during recording (tap-to-talk and push-to-talk)
   - Post-recording cooldown (2.5s) before showing queued notifications
   - Priority-based coalescing (process > audio) — one notification, not three
+- **linuxOutlookNotificationMonitor.js**: Captures meeting-title context from Outlook Web reminders on KDE
+  - Monitors local `org.freedesktop.Notifications.Notify` and portal `AddNotification` calls only while meeting detection is enabled
+  - Accepts Microsoft Edge notifications from `outlook.office.com` when the body contains a standalone meeting start time; portal messages also require positive Edge + Outlook attribution
+  - Keeps up to 10 sanitized, in-memory candidates; accepted candidates are consumed after a meeting note is created
+  - Reconnects after system resume and emits privacy-safe matching diagnostics without title or body content
 - **meetingProcessDetector.js**: Detects running meeting apps
   - macOS: Event-driven via `systemPreferences.subscribeWorkspaceNotification` (zero CPU)
   - Windows/Linux: Shared `processListCache` polling (30s interval)
 - **audioActivityDetector.js**: Detects microphone usage for unscheduled meetings
   - macOS: Event-driven via `macos-mic-listener` binary (CoreAudio property listeners)
   - Windows: Event-driven via `windows-mic-listener.exe` (WASAPI sessions, self-PID exclusion)
-  - Linux: Event-driven via `pactl subscribe` (PulseAudio source-output events)
+  - Linux: Event-driven via `pactl subscribe`; each source-output event refreshes corked/running state before changing detection state
   - All platforms: Graceful fallback to polling if native approach fails
 - **processListCache.js**: Shared singleton process list cache (5s TTL, `ps-list` npm)
 - **googleCalendarManager.js**: Google Calendar sync with exponential backoff
@@ -554,13 +559,15 @@ On Hyprland (wlroots Wayland compositor), Electron's `globalShortcut` API and th
 
 ### 16. Meeting Detection (Event-Driven)
 
-Detects meetings via three independent sources, orchestrated by `MeetingDetectionEngine`:
+Detects meetings via three independent signal sources, orchestrated by
+`MeetingDetectionEngine`, with optional local notification context:
 
 **Architecture**:
 
 - `MeetingDetectionEngine` listens to events from `MeetingProcessDetector` and `AudioActivityDetector`
 - `GoogleCalendarManager` provides calendar context (imminent events, active meetings)
-- All three sources feed into a unified notification pipeline
+- On Linux + KDE, `LinuxOutlookNotificationMonitor` can provide a meeting title from an Outlook Web reminder delivered by Microsoft Edge
+- Detection signals feed into a unified notification pipeline; Outlook notifications provide context only and never trigger a prompt
 
 **Process Detection** (known meeting apps — Zoom, Teams, Webex, FaceTime):
 
@@ -571,13 +578,26 @@ Detects meetings via three independent sources, orchestrated by `MeetingDetectio
 
 - macOS: `macos-mic-listener` binary — CoreAudio `kAudioDevicePropertyDeviceIsRunningSomewhere` property listeners with hot-plug support
 - Windows: `windows-mic-listener.exe` — WASAPI `IAudioSessionManager2` session monitoring, `--exclude-pid` for self-mic exclusion
-- Linux: `pactl subscribe` — PulseAudio source-output events
+- Linux: `pactl subscribe` — PulseAudio source-output events trigger a state-aware source-output snapshot; polling uses the same cork-state snapshot and falls back to `pw-dump`, which counts only running PipeWire microphone streams
 - All platforms: Graceful fallback to polling if native binary/command unavailable
+- Dismissed microphone activity remains latched until 60 seconds of verified inactivity, so a continuously open stream cannot re-prompt after every five-minute cooldown; failed state checks do not re-arm detection
 
 **Calendar Reminders** (scheduled meetings):
 
 - `GoogleCalendarManager` fires `meetingDetectionEngine.handleCalendarReminder(event)` 1 minute before the scheduled start (`MEETING_REMINDER_LEAD_MS`) — no native OS notifications; all meeting prompts use the in-app overlay so they survive Focus/DND and screen-share notification muting
 - Calendar-sourced prompts show a Join primary action when the event has a meeting link (`getMeetingJoinUrl` in `src/helpers/meetingJoinUrl.js`, shared with the renderer's Upcoming Meetings join button) — Join opens the link and starts the note
+
+**Outlook Web Notification Context** (Linux + KDE, Microsoft Edge):
+
+- A raw session D-Bus monitor observes direct `org.freedesktop.Notifications.Notify` and portal `org.freedesktop.portal.Notification.AddNotification` calls
+- Direct messages must identify Microsoft Edge and the exact KDE origin `outlook.office.com`; portal messages are accepted only when they positively expose the same Edge + Outlook attribution
+- A reminder is cached only when its body contains a standalone start time (for example, `16:00` or `Starts at 16:00`); the first valid time is resolved to the nearest local day
+- Titles are sanitized, truncated to 200 characters, held only in memory, and matched from 30 minutes before until 60 minutes after the scheduled time
+- Started events take precedence over upcoming events; the newest displayed reminder wins among started events, while the nearest event wins when all candidates are upcoming
+- A notification candidate is consumed only after its automatic or manual meeting note is successfully created; dismissals and timeouts leave it available
+- Title precedence is Google Calendar → Outlook notification → `New note`; the Outlook title also applies to manual meeting starts when a matching reminder remains cached
+- D-Bus monitoring failures and unattributed portal messages fall back to the existing `New note` behavior without requesting broader permissions
+- Resume reconnects preserve still-eligible candidates; debug logs contain only transport, reason, timing, and shape metadata, never notification titles or bodies
 
 **UX Rules**:
 
@@ -588,6 +608,7 @@ Detects meetings via three independent sources, orchestrated by `MeetingDetectio
 - After recording: 2.5s cooldown before showing queued notifications
 - Multiple signals coalesced: one overlay at a time; a newer prompt replaces the current one
 - Calendar-aware: if an ongoing or imminent calendar event exists, the prompt shows the event name and links the note to the event
+- Outlook-aware on KDE: if no Google Calendar event matches, an eligible Edge/Outlook reminder supplies the title without linking a calendar event
 - Active meeting recording (meeting mode): all detections suppressed
 
 **Binary Distribution**:

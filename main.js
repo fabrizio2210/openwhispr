@@ -289,6 +289,9 @@ const LinuxPortalAudioManager = require("./src/helpers/linuxPortalAudioManager")
 const WindowsLoopbackAudioManager = require("./src/helpers/windowsLoopbackAudioManager");
 const MeetingAecManager = require("./src/helpers/meetingAecManager");
 const MeetingDetectionEngine = require("./src/helpers/meetingDetectionEngine");
+const {
+  LinuxOutlookNotificationMonitor,
+} = require("./src/helpers/linuxOutlookNotificationMonitor");
 const { i18nMain, changeLanguage } = require("./src/helpers/i18nMain");
 const { ensureYdotool } = require("./src/helpers/ensureYdotool");
 const sidecarRegistry = require("./src/helpers/sidecarRegistry");
@@ -407,7 +410,8 @@ function initializeCoreManagers() {
     new MeetingProcessDetector(),
     new AudioActivityDetector(),
     windowManager,
-    databaseManager
+    databaseManager,
+    new LinuxOutlookNotificationMonitor()
   );
   windowManager.meetingDetectionEngine = meetingDetectionEngine;
   googleCalendarManager.meetingDetectionEngine = meetingDetectionEngine;
@@ -1066,6 +1070,7 @@ async function startApp() {
     if (googleCalendarManager) {
       googleCalendarManager.onWakeFromSleep();
     }
+    meetingDetectionEngine?.onWakeFromSleep();
     // Sleep evicts the local GPU model from VRAM; reload it once the driver settles. See #766.
     if (wakeRewarmTimer) clearTimeout(wakeRewarmTimer);
     wakeRewarmTimer = setTimeout(() => {

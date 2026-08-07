@@ -3,10 +3,11 @@ const debugLogger = require("./debugLogger");
 const CACHE_TTL_MS = 5000;
 
 class ProcessListCache {
-  constructor() {
+  constructor(loadPsList = () => import("ps-list")) {
     this._cache = null;
     this._cacheTime = 0;
     this._pending = null;
+    this._loadPsList = loadPsList;
   }
 
   async getProcessList() {
@@ -27,7 +28,7 @@ class ProcessListCache {
 
   async _fetch(now) {
     try {
-      const psList = (await import("ps-list")).default;
+      const psList = (await this._loadPsList()).default;
       const procs = await psList();
       const names = procs.map((p) => (p.name || "").toLowerCase());
       this._cache = names;
@@ -36,7 +37,7 @@ class ProcessListCache {
       return names;
     } catch (err) {
       debugLogger.warn("Failed to fetch process list", { error: err.message }, "meeting");
-      return [];
+      throw err;
     }
   }
 
@@ -48,3 +49,4 @@ class ProcessListCache {
 }
 
 module.exports = new ProcessListCache();
+module.exports.ProcessListCache = ProcessListCache;

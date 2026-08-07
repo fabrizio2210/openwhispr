@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "versionKey": "notificationPreferencesVersion",
+  "sources": {
+    "AUDIO": "audio",
+    "PROCESS": "process",
+    "CALENDAR": "calendar",
+    "UPDATES": "updates"
+  },
+  "preferences": {
+    "notificationsEnabled": {
+      "default": true,
+      "required": true,
+      "aliases": [],
+      "meetingDetectionGate": true,
+      "notificationSources": ["*"]
+    },
+    "notifyMeetingDetection": {
+      "default": true,
+      "required": true,
+      "aliases": ["meetingDetectionNotifications"],
+      "meetingDetectionGate": true,
+      "notificationSources": ["audio", "process"]
+    },
+    "notifyCalendarReminders": {
+      "default": true,
+      "required": false,
+      "aliases": [],
+      "meetingDetectionGate": false,
+      "notificationSources": ["calendar"]
+    },
+    "notifyUpdates": {
+      "default": true,
+      "required": false,
+      "aliases": [],
+      "meetingDetectionGate": false,
+      "notificationSources": ["updates"]
+    }
+  }
+}

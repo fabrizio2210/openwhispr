@@ -2,7 +2,7 @@
  * Windows Microphone Listener
  *
  * Monitors WASAPI audio capture sessions for microphone usage.
- * Outputs MIC_START/MIC_STOP events with PIDs to stdout.
+ * Outputs MIC_START/MIC_STOP events with stable session IDs to stdout.
  *
  * Uses IAudioSessionManager2 to enumerate and monitor capture sessions.
  * Supports --exclude-pid to ignore OpenWhispr's own microphone usage.
@@ -45,6 +45,7 @@ DEFINE_GUID(IID_IAudioSessionNotification,
 
 static DWORD g_excludePid = 0;
 static volatile BOOL g_running = TRUE;
+static volatile LONG g_nextSessionId = 0;
 
 /* ========================================================================
  * Forward declarations for COM interface implementations
@@ -61,7 +62,27 @@ typedef struct SessionEvents {
     IAudioSessionEventsVtbl *lpVtbl;
     LONG refCount;
     DWORD pid;
+    DWORD sessionId;
+    volatile LONG active;
 } SessionEvents;
+
+static void EmitSessionState(SessionEvents *self, BOOL active)
+{
+    DWORD pid = self->pid;
+    if (g_excludePid != 0 && pid == g_excludePid) {
+        return;
+    }
+
+    LONG nextState = active ? 1 : 0;
+    LONG previousState = InterlockedExchange(&self->active, nextState);
+    if (previousState == nextState) {
+        return;
+    }
+
+    printf(active ? "MIC_START %lu %lu\n" : "MIC_STOP %lu %lu\n",
+        (unsigned long)pid, (unsigned long)self->sessionId);
+    fflush(stdout);
+}
 
 static HRESULT STDMETHODCALLTYPE SE_QueryInterface(
     IAudioSessionEvents *This, REFIID riid, void **ppvObject)
@@ -132,18 +153,10 @@ static HRESULT STDMETHODCALLTYPE SE_OnStateChanged(
     IAudioSessionEvents *This, AudioSessionState NewState)
 {
     SessionEvents *self = (SessionEvents *)This;
-    DWORD pid = self->pid;
-
-    if (g_excludePid != 0 && pid == g_excludePid) {
-        return S_OK;
-    }
-
     if (NewState == AudioSessionStateActive) {
-        printf("MIC_START %lu\n", (unsigned long)pid);
-        fflush(stdout);
+        EmitSessionState(self, TRUE);
     } else if (NewState == AudioSessionStateInactive || NewState == AudioSessionStateExpired) {
-        printf("MIC_STOP %lu\n", (unsigned long)pid);
-        fflush(stdout);
+        EmitSessionState(self, FALSE);
     }
 
     return S_OK;
@@ -153,14 +166,7 @@ static HRESULT STDMETHODCALLTYPE SE_OnSessionDisconnected(
     IAudioSessionEvents *This, AudioSessionDisconnectReason DisconnectReason)
 {
     SessionEvents *self = (SessionEvents *)This;
-    DWORD pid = self->pid;
-
-    if (g_excludePid != 0 && pid == g_excludePid) {
-        return S_OK;
-    }
-
-    printf("MIC_STOP %lu\n", (unsigned long)pid);
-    fflush(stdout);
+    EmitSessionState(self, FALSE);
 
     return S_OK;
 }
@@ -185,6 +191,8 @@ static SessionEvents *CreateSessionEvents(DWORD pid)
     se->lpVtbl = &g_sessionEventsVtbl;
     se->refCount = 1;
     se->pid = pid;
+    se->sessionId = (DWORD)InterlockedIncrement(&g_nextSessionId);
+    se->active = 0;
     return se;
 }
 
@@ -281,11 +289,8 @@ static void RegisterSessionEventsOnControl(IAudioSessionControl *pSessionControl
     /* Also check current state and emit if already active */
     AudioSessionState state;
     hr = pSessionControl->lpVtbl->GetState(pSessionControl, &state);
-    if (SUCCEEDED(hr) && state == AudioSessionStateActive) {
-        if (g_excludePid == 0 || pid != g_excludePid) {
-            printf("MIC_START %lu\n", (unsigned long)pid);
-            fflush(stdout);
-        }
+    if (events && SUCCEEDED(hr) && state == AudioSessionStateActive) {
+        EmitSessionState(events, TRUE);
     }
 
     pCtl2->lpVtbl->Release(pCtl2);

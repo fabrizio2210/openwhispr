@@ -19,6 +19,10 @@ const { createTinfoilRealtimeSocket } = require("./tinfoilSecureClient");
 const { getTinfoilChatModels } = require("./tinfoilCatalog");
 const { transcribeWithTinfoil } = require("./tinfoilTranscription");
 const AudioStorageManager = require("./audioStorage");
+const {
+  isNotificationPreferenceSnapshot,
+  syncMeetingNotificationPreferences,
+} = require("./meetingNotificationPreferences");
 
 // Tinfoil's only realtime STT model — fallback when the renderer omits one.
 const TINFOIL_REALTIME_MODEL = "voxtral-mini-4b-realtime";
@@ -8708,29 +8712,16 @@ class IPCHandlers {
       }
     });
 
-    const NOTIFICATION_PREF_KEYS = new Set([
-      "notificationsEnabled",
-      "notifyMeetingDetection",
-      "notifyCalendarReminders",
-      "notifyUpdates",
-    ]);
-
     ipcMain.handle("sync-notification-preferences", async (_event, prefs) => {
       try {
-        if (!prefs || typeof prefs !== "object") {
+        if (!isNotificationPreferenceSnapshot(prefs)) {
           return { success: false, error: "Invalid preferences" };
         }
-        for (const [k, v] of Object.entries(prefs)) {
-          if (NOTIFICATION_PREF_KEYS.has(k)) {
-            this.windowManager.notificationPrefs[k] = !!v;
-          }
-        }
-        // Detection only serves the notification, so the toggle also gates the detector.
-        const { notificationsEnabled, notifyMeetingDetection } =
-          this.windowManager.notificationPrefs;
-        this.meetingDetectionEngine?.setPreferences({
-          audioDetection: notificationsEnabled && notifyMeetingDetection,
-        });
+        syncMeetingNotificationPreferences(
+          this.windowManager.notificationPrefs,
+          prefs,
+          this.meetingDetectionEngine
+        );
         return { success: true };
       } catch (error) {
         return { success: false, error: error.message };

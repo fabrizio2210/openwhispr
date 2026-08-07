@@ -8,6 +8,7 @@ import whisperVadConstants from "../constants/whisperVad.json";
 import type { LocalTranscriptionProvider, InferenceMode, SelfHostedType } from "../types/electron";
 import type { GoogleCalendarAccount } from "../types/calendar";
 import { PROMPT_KIND_LIST, type PromptKind } from "../config/prompts/registry";
+import { createNotificationPreferenceSnapshot } from "../config/notificationPreferences";
 import { deriveReasoningMode, buildReasoningScopePatches } from "../helpers/reasoningRouting";
 import {
   INFERENCE_SCOPES,
@@ -1890,6 +1891,22 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   },
 }));
 
+if (isBrowser) {
+  let previousNotificationSnapshot = createNotificationPreferenceSnapshot(
+    useSettingsStore.getState()
+  );
+  useSettingsStore.subscribe((state) => {
+    const nextNotificationSnapshot = createNotificationPreferenceSnapshot(state);
+    const unchanged = Object.entries(nextNotificationSnapshot).every(
+      ([key, value]) => previousNotificationSnapshot[key] === value
+    );
+    if (unchanged) return;
+
+    previousNotificationSnapshot = nextNotificationSnapshot;
+    void window.electronAPI?.syncNotificationPreferences?.(nextNotificationSnapshot);
+  });
+}
+
 // --- Selectors (derived state, not stored) ---
 
 export const selectIsCloudCleanupMode = (state: SettingsState) =>
@@ -2382,12 +2399,9 @@ export async function initializeSettings(): Promise<void> {
 
     try {
       const currentState = useSettingsStore.getState();
-      await window.electronAPI.syncNotificationPreferences?.({
-        notificationsEnabled: currentState.notificationsEnabled,
-        notifyMeetingDetection: currentState.notifyMeetingDetection,
-        notifyCalendarReminders: currentState.notifyCalendarReminders,
-        notifyUpdates: currentState.notifyUpdates,
-      });
+      await window.electronAPI.syncNotificationPreferences?.(
+        createNotificationPreferenceSnapshot(currentState)
+      );
     } catch (err) {
       logger.warn(
         "Failed to sync notification preferences on startup",
