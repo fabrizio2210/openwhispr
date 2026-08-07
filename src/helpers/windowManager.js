@@ -26,6 +26,7 @@ const {
 const { DEV_SERVER_PORT } = DevServerManager;
 const AUTO_END_NOTIFICATION_LOAD_TIMEOUT_MS = 10_000;
 const DRAG_MOVE_TOLERANCE_PX = 2;
+const { createDefaultNotificationPreferences } = require("./meetingNotificationPreferences");
 const {
   MAIN_WINDOW_CONFIG,
   CONTROL_PANEL_CONFIG,
@@ -84,12 +85,8 @@ class WindowManager {
     this._pendingUpdateNotificationData = null;
     this._deferredUpdateNotificationInfo = null;
     this._updateNotificationDismissed = false;
-    this.notificationPrefs = {
-      notificationsEnabled: true,
-      notifyMeetingDetection: true,
-      notifyCalendarReminders: true,
-      notifyUpdates: true,
-    };
+    this.notificationPrefs = createDefaultNotificationPreferences();
+    this.notificationPreferencesSynchronized = false;
     this.tray = null;
     this.hotkeyManager = new HotkeyManager();
     this.dragManager = new DragManager();

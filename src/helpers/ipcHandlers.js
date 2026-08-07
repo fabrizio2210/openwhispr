@@ -74,6 +74,10 @@ const AudioStorageManager = require("./audioStorage");
 const AgentStreamRequestRegistry = require("./agentStreamRequestRegistry");
 const createMeetingTranscriptionLifecycle = require("./meetingTranscriptionLifecycle");
 const { registerMeetingAutoEndLifecycleHandlers } = require("./meetingAutoEndLifecycle");
+const {
+  isNotificationPreferenceSnapshot,
+  syncMeetingNotificationPreferences,
+} = require("./meetingNotificationPreferences");
 const liveSpeakerIdentifier = require("./liveSpeakerIdentifier");
 const { supportsLiveSpeakerIdentification } = require("./liveSpeakerIdPolicy");
 const MeetingEchoLeakDetector = require("./meetingEchoLeakDetector");
@@ -10632,29 +10636,17 @@ class IPCHandlers {
       }
     });
 
-    const NOTIFICATION_PREF_KEYS = new Set([
-      "notificationsEnabled",
-      "notifyMeetingDetection",
-      "notifyCalendarReminders",
-      "notifyUpdates",
-    ]);
-
     ipcMain.handle("sync-notification-preferences", async (_event, prefs) => {
       try {
-        if (!prefs || typeof prefs !== "object") {
+        if (!isNotificationPreferenceSnapshot(prefs)) {
           return { success: false, error: "Invalid preferences" };
         }
-        for (const [k, v] of Object.entries(prefs)) {
-          if (NOTIFICATION_PREF_KEYS.has(k)) {
-            this.windowManager.notificationPrefs[k] = !!v;
-          }
-        }
-        // Detection only serves the notification, so the toggle also gates the detector.
-        const { notificationsEnabled, notifyMeetingDetection } =
-          this.windowManager.notificationPrefs;
-        this.meetingDetectionEngine?.setPreferences({
-          audioDetection: notificationsEnabled && notifyMeetingDetection,
-        });
+        syncMeetingNotificationPreferences(
+          this.windowManager.notificationPrefs,
+          prefs,
+          this.meetingDetectionEngine
+        );
+        this.updateManager?.handleNotificationPreferencesSynchronized();
         return { success: true };
       } catch (error) {
         return { success: false, error: error.message };

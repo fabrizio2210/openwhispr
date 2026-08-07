@@ -4,6 +4,10 @@ const { getMeetingJoinUrl } = require("./meetingJoinUrl");
 const createMeetingAutoEndController = require("./meetingAutoEndController");
 const { createMeetingAudioActivityMonitor } = require("./meetingAudioActivityMonitor");
 const { broadcastToWindows } = require("./windowBroadcast");
+const {
+  getNotificationPreferenceKeysForSource,
+  NOTIFICATION_SOURCES,
+} = require("./meetingNotificationPreferences");
 
 const IMMINENT_THRESHOLD_MS = 5 * 60 * 1000;
 const AUTO_END_TICK_MS = 1000;
@@ -20,12 +24,12 @@ const AUTO_END_RESTART_CLAIM_MS = 30_000;
 
 const PLACEHOLDER_PREFIX = { __detected__: "detected", __manual__: "manual" };
 
-function placeholderEvent(calendarId) {
-  const now = Date.now();
+function placeholderEvent(calendarId, context = null) {
+  const now = context?.scheduledAt ?? Date.now();
   return {
     id: `${PLACEHOLDER_PREFIX[calendarId]}-${now}`,
     calendar_id: calendarId,
-    summary: "New note",
+    summary: context?.title || "New note",
     start_time: new Date(now).toISOString(),
     end_time: new Date(now + 3600000).toISOString(),
     is_all_day: 0,
@@ -45,6 +49,7 @@ class MeetingDetectionEngine {
     windowManager,
     databaseManager,
     {
+      meetingTitleContextProvider = null,
       createAutoEndController = createMeetingAutoEndController,
       createAudioActivityMonitor = createMeetingAudioActivityMonitor,
       now = Date.now,
@@ -57,11 +62,21 @@ class MeetingDetectionEngine {
     this.audioActivityDetector = audioActivityDetector;
     this.windowManager = windowManager;
     this.databaseManager = databaseManager;
+    this.meetingTitleContextProvider = meetingTitleContextProvider;
+    this.broadcastToWindows = broadcastToWindows;
     this.activeDetections = new Map();
     this.preferences = { processDetection: true, audioDetection: true };
+    // The real WindowManager initializes this explicitly to false until the
+    // renderer sends its persisted preferences. Legacy/test managers that do
+    // not expose the flag retain the historical enabled-by-default behavior.
+    this.notificationPreferencesSynchronized =
+      windowManager.notificationPreferencesSynchronized !== false;
+    this.notificationContextEnabled = false;
+    this._started = false;
     this._userRecording = false;
     this._meetingModeActive = false;
     this._notificationQueue = [];
+    this._preSyncCalendarDetections = new Map();
     this._postRecordingCooldown = null;
     this._recordingSession = null;
     this._pendingAutoEnd = null;
@@ -117,7 +132,7 @@ class MeetingDetectionEngine {
     });
 
     this.audioActivityDetector.on("sustained-audio-detected", (data) => {
-      this._handleDetection("audio", "sustained-audio", data);
+      this._handleDetection(NOTIFICATION_SOURCES.AUDIO, "sustained-audio", data);
     });
 
     this.audioActivityDetector.on("external-mic-state-changed", (state) => {
@@ -307,7 +322,9 @@ class MeetingDetectionEngine {
   }
 
   _syncAudioActivityDetector() {
-    if (this.preferences.audioDetection || this._isAutoEndWanted()) {
+    const promptDetectionWanted =
+      this.notificationPreferencesSynchronized && this.preferences.audioDetection;
+    if (promptDetectionWanted || this._isAutoEndWanted()) {
       return this.audioActivityDetector.start();
     }
 
@@ -463,13 +480,28 @@ class MeetingDetectionEngine {
   // Calendar reminders enter the same pipeline as mic detections, so they share
   // the recording gates, queueing, cooldowns, and the overlay window.
   handleCalendarReminder(event) {
-    this._handleDetection("calendar", event.id, { event, detectedAt: Date.now() });
+    this._handleDetection(NOTIFICATION_SOURCES.CALENDAR, event.id, {
+      event,
+      detectedAt: Date.now(),
+    });
   }
 
   _handleDetection(source, key, data) {
     const detectionId = `${source}:${key}`;
 
-    if (source === "audio" && !this.preferences.audioDetection) {
+    if (!this.notificationPreferencesSynchronized) {
+      if (source === NOTIFICATION_SOURCES.CALENDAR) {
+        debugLogger.info(
+          "Calendar detection queued until notification preferences synchronize",
+          { detectionId },
+          "meeting"
+        );
+        this._preSyncCalendarDetections.set(detectionId, { source, key, data });
+      }
+      return;
+    }
+
+    if (source === NOTIFICATION_SOURCES.AUDIO && !this.preferences.audioDetection) {
       debugLogger.debug("Audio detection disabled, ignoring", { detectionId }, "meeting");
       return;
     }
@@ -519,37 +551,84 @@ class MeetingDetectionEngine {
   }
 
   _notificationsEnabledFor(source) {
+    if (!this.notificationPreferencesSynchronized) return false;
     const nPrefs = this.windowManager.notificationPrefs || {};
-    if (nPrefs.notificationsEnabled === false) return false;
-    const prefKey = source === "calendar" ? "notifyCalendarReminders" : "notifyMeetingDetection";
-    return nPrefs[prefKey] !== false;
+    const preferenceKeys = getNotificationPreferenceKeysForSource(source);
+    return preferenceKeys !== null && preferenceKeys.every((key) => nPrefs[key] !== false);
+  }
+
+  _flushPreSyncCalendarDetections() {
+    if (!this.notificationPreferencesSynchronized || this._preSyncCalendarDetections.size === 0) {
+      return;
+    }
+
+    const pendingDetections = [...this._preSyncCalendarDetections.values()];
+    this._preSyncCalendarDetections.clear();
+    for (const { source, key, data } of pendingDetections) {
+      this._handleDetection(source, key, data);
+    }
   }
 
   // activeMeeting only means the event's scheduled window is open — actual meeting
   // recordings are tracked by _meetingModeActive.
   _findCalendarEvent() {
-    const calendarState = this.reminderScheduler.getActiveMeetingState();
-    if (calendarState.activeMeeting) return calendarState.activeMeeting;
+    const calendarState = this.reminderScheduler?.getActiveMeetingState?.();
+    if (calendarState?.activeMeeting) return calendarState.activeMeeting;
+
+    const activeEvents = Array.isArray(calendarState?.activeEvents)
+      ? calendarState.activeEvents
+      : (this.databaseManager?.getActiveEvents?.() ?? []);
+    if (activeEvents.length > 0) return activeEvents[0];
 
     const now = Date.now();
     return (
-      calendarState.upcomingEvents?.find((evt) => {
+      calendarState?.upcomingEvents?.find((evt) => {
         const start = new Date(evt.start_time).getTime();
         return start - now <= IMMINENT_THRESHOLD_MS && start > now;
       }) ?? null
     );
   }
 
+  _findNotificationContext() {
+    try {
+      return this.meetingTitleContextProvider?.getBestCandidate?.(Date.now()) ?? null;
+    } catch {
+      debugLogger.warn(
+        "Failed to resolve notification meeting title",
+        { failureType: "candidate-resolution", retrying: false },
+        "meeting"
+      );
+      return null;
+    }
+  }
+
+  _consumeNotificationContext(candidateId) {
+    if (candidateId === null || candidateId === undefined) return false;
+    try {
+      return this.meetingTitleContextProvider?.consumeCandidate?.(candidateId) === true;
+    } catch {
+      debugLogger.warn(
+        "Failed to consume notification meeting title",
+        { failureType: "candidate-consumption", retrying: false },
+        "meeting"
+      );
+      return false;
+    }
+  }
+
   _showPrompt(detectionId, source, key, data) {
     const calendarEvent = data?.event ?? this._findCalendarEvent();
-    const event = calendarEvent ?? placeholderEvent("__detected__");
+    const notificationContext = calendarEvent ? null : this._findNotificationContext();
+    const event =
+      calendarEvent ?? placeholderEvent("__detected__", notificationContext ?? undefined);
 
     let variant = "detected";
-    if (calendarEvent) {
-      const started = new Date(calendarEvent.start_time).getTime() <= Date.now();
+    if (calendarEvent || notificationContext) {
+      const started = new Date(event.start_time).getTime() <= Date.now();
       variant = started ? "underway" : "starting";
     }
-    const joinUrl = source === "calendar" ? getMeetingJoinUrl(calendarEvent) : null;
+    const joinUrl =
+      source === NOTIFICATION_SOURCES.CALENDAR ? getMeetingJoinUrl(calendarEvent) : null;
 
     debugLogger.info(
       "Showing notification",
@@ -557,7 +636,12 @@ class MeetingDetectionEngine {
         detectionId,
         source,
         variant,
-        title: calendarEvent?.summary ?? null,
+        title: notificationContext ? null : (calendarEvent?.summary ?? null),
+        titleSource: notificationContext
+          ? "outlook-notification"
+          : calendarEvent
+            ? NOTIFICATION_SOURCES.CALENDAR
+            : null,
         hasJoinUrl: !!joinUrl,
       },
       "meeting"
@@ -566,6 +650,7 @@ class MeetingDetectionEngine {
     const detection = this.activeDetections.get(detectionId);
     if (detection) {
       detection.event = event;
+      detection.notificationCandidateId = notificationContext?.id ?? null;
     }
 
     this.windowManager.showMeetingNotification({
@@ -626,9 +711,10 @@ class MeetingDetectionEngine {
           return;
         }
 
+        this._consumeNotificationContext(detection.notificationCandidateId);
         this._meetingModeActive = true;
 
-        broadcastToWindows("note-added", noteResult.note);
+        this.broadcastToWindows("note-added", noteResult.note);
 
         if (isRealEvent) {
           const calEvent = this.databaseManager.getCalendarEventById(detection.event.id);
@@ -638,7 +724,7 @@ class MeetingDetectionEngine {
           }
           const updateResult = this.databaseManager.updateNote(noteResult.note.id, updates);
           if (updateResult?.success && updateResult?.note) {
-            broadcastToWindows("note-updated", updateResult.note);
+            this.broadcastToWindows("note-updated", updateResult.note);
           }
         }
 
@@ -648,10 +734,8 @@ class MeetingDetectionEngine {
           event: detection.event,
           trigger: "calendar-join",
         });
-
-        this.audioActivityDetector.resetPrompt();
       } else if (action === "dismiss") {
-        if (detection) {
+        if (detection?.source === NOTIFICATION_SOURCES.AUDIO) {
           this._dismiss();
         }
       }
@@ -673,14 +757,15 @@ class MeetingDetectionEngine {
   async startManualMeeting() {
     debugLogger.info("Starting manual meeting", {}, "meeting");
 
-    const activeEvents = this.databaseManager.getActiveEvents();
-    if (activeEvents?.length > 0) {
-      return this.joinCalendarMeeting(activeEvents[0].id, "hotkey");
+    const calendarEvent = this._findCalendarEvent();
+    if (calendarEvent) {
+      return this.joinCalendarMeeting(calendarEvent.id, "hotkey");
     }
 
     this._meetingModeActive = true;
 
-    const event = placeholderEvent("__manual__");
+    const notificationContext = this._findNotificationContext();
+    const event = placeholderEvent("__manual__", notificationContext ?? undefined);
 
     const noteResult = this.databaseManager.saveNote(event.summary, "", "meeting");
     const meetingsFolder = this.databaseManager.getMeetingsFolder();
@@ -695,7 +780,8 @@ class MeetingDetectionEngine {
       return;
     }
 
-    broadcastToWindows("note-added", noteResult.note);
+    this._consumeNotificationContext(notificationContext?.id);
+    this.broadcastToWindows("note-added", noteResult.note);
 
     await this.windowManager.queueMeetingNoteNavigation({
       noteId: noteResult.note.id,
@@ -758,7 +844,7 @@ class MeetingDetectionEngine {
     }
     const updateResult = this.databaseManager.updateNote(noteResult.note.id, updates);
 
-    broadcastToWindows("note-added", updateResult?.note || noteResult.note);
+    this.broadcastToWindows("note-added", updateResult?.note || noteResult.note);
 
     await this.windowManager.queueMeetingNoteNavigation({
       noteId: noteResult.note.id,
@@ -832,12 +918,25 @@ class MeetingDetectionEngine {
       "meeting"
     );
 
-    const best = this._notificationQueue[0];
-    const detectionId = `${best.source}:${best.key}`;
+    let shown = false;
+    for (const candidate of this._notificationQueue) {
+      const detectionId = `${candidate.source}:${candidate.key}`;
+      const detection = this.activeDetections.get(detectionId);
+      const allowed = this._notificationsEnabledFor(candidate.source);
 
-    const detection = this.activeDetections.get(detectionId);
-    if (detection) {
-      this._showPrompt(detectionId, best.source, best.key, best.data);
+      if (!shown && allowed && detection && !detection.dismissed) {
+        this._showPrompt(detectionId, candidate.source, candidate.key, candidate.data);
+        shown = true;
+      } else {
+        this.activeDetections.delete(detectionId);
+        if (!allowed) {
+          debugLogger.info(
+            "Queued notification disabled by current preference, dropping",
+            { detectionId, source: candidate.source },
+            "meeting"
+          );
+        }
+      }
     }
 
     this._notificationQueue = [];
@@ -850,10 +949,6 @@ class MeetingDetectionEngine {
   setMeetingModeActive(active) {
     this._meetingModeActive = active;
     debugLogger.info("Meeting mode active state changed", { active }, "meeting");
-    if (!active) {
-      // Own mic usage during meeting mode sets hasPrompted=true; reset so future detections work
-      this.audioActivityDetector.resetPrompt();
-    }
   }
 
   setUserRecording(active) {
@@ -893,14 +988,70 @@ class MeetingDetectionEngine {
     this._syncAudioActivityDetector();
   }
 
+  setNotificationPreferencesSynchronized(synchronized) {
+    const nextSynchronized = synchronized === true;
+    if (nextSynchronized === this.notificationPreferencesSynchronized) return;
+
+    this.notificationPreferencesSynchronized = nextSynchronized;
+    this.windowManager.notificationPreferencesSynchronized = nextSynchronized;
+    if (!this._started) return;
+
+    this._syncAudioActivityDetector();
+
+    if (nextSynchronized && this.notificationContextEnabled) {
+      this.meetingTitleContextProvider?.start?.();
+    } else {
+      this.meetingTitleContextProvider?.stop?.();
+    }
+    if (nextSynchronized) this._flushPreSyncCalendarDetections();
+  }
+
+  setNotificationContextEnabled(enabled) {
+    const nextEnabled = enabled === true;
+    if (nextEnabled === this.notificationContextEnabled) return;
+
+    this.notificationContextEnabled = nextEnabled;
+    if (!this._started || !this.notificationPreferencesSynchronized) return;
+
+    if (this.notificationContextEnabled) {
+      this.meetingTitleContextProvider?.start?.();
+    } else {
+      this.meetingTitleContextProvider?.stop?.();
+    }
+  }
+
+  onWakeFromSleep() {
+    if (
+      !this._started ||
+      !this.notificationPreferencesSynchronized ||
+      !this.notificationContextEnabled
+    )
+      return false;
+    try {
+      return this.meetingTitleContextProvider?.reconnect?.() === true;
+    } catch {
+      debugLogger.warn(
+        "Failed to reconnect notification meeting title monitor",
+        { failureType: "resume-reconnect", retrying: false },
+        "meeting"
+      );
+      return false;
+    }
+  }
+
   getPreferences() {
     return { ...this.preferences };
   }
 
   start() {
     debugLogger.info("Meeting detection engine started", this.preferences, "meeting");
+    this._started = true;
     this._syncMeetingProcessDetector();
     this._syncAudioActivityDetector();
+    if (this.notificationPreferencesSynchronized && this.notificationContextEnabled) {
+      this.meetingTitleContextProvider?.start?.();
+    }
+    this._flushPreSyncCalendarDetections();
   }
 
   stop() {
@@ -911,6 +1062,8 @@ class MeetingDetectionEngine {
     this._recordingSession = null;
     this.meetingProcessDetector.stop();
     this.audioActivityDetector.stop();
+    this.meetingTitleContextProvider?.stop?.();
+    this._started = false;
     this.activeDetections.clear();
     this._meetingModeActive = false;
     if (this._postRecordingCooldown) {
@@ -918,6 +1071,7 @@ class MeetingDetectionEngine {
       this._postRecordingCooldown = null;
     }
     this._notificationQueue = [];
+    this._preSyncCalendarDetections.clear();
   }
 }
 

@@ -1,10 +1,39 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const Module = require("node:module");
 
 const {
   NotificationDismissTimer,
   getNotificationTimeoutMs,
 } = require("../../src/helpers/notificationTimer");
+const notificationTimerModulePath = require.resolve("../../src/helpers/notificationTimer");
+const meetingNotificationPreferencesModulePath =
+  require.resolve("../../src/helpers/meetingNotificationPreferences");
+const notificationPreferenceSchemaModulePath =
+  require.resolve("../../src/config/notificationPreferencesSchema.json");
+const notificationPreferenceSchema = require(notificationPreferenceSchemaModulePath);
+
+function loadNotificationTimerWithSchema(schema) {
+  const originalLoad = Module._load;
+  delete require.cache[notificationTimerModulePath];
+  delete require.cache[meetingNotificationPreferencesModulePath];
+  Module._load = function loadWithSchema(request, parent, isMain) {
+    if (
+      Module._resolveFilename(request, parent, isMain) === notificationPreferenceSchemaModulePath
+    ) {
+      return schema;
+    }
+    return originalLoad.call(this, request, parent, isMain);
+  };
+
+  try {
+    return require(notificationTimerModulePath);
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[notificationTimerModulePath];
+    delete require.cache[meetingNotificationPreferencesModulePath];
+  }
+}
 
 test("calendar prompts outlive the 60s reminder lead; detections keep 30s", () => {
   assert.ok(
@@ -12,6 +41,20 @@ test("calendar prompts outlive the 60s reminder lead; detections keep 30s", () =
     "a calendar prompt must survive past the meeting start"
   );
   assert.equal(getNotificationTimeoutMs("audio"), 30 * 1000);
+});
+
+test("calendar timeout follows a calendar source renamed in the schema", () => {
+  const schema = structuredClone(notificationPreferenceSchema);
+  schema.sources.CALENDAR = "calendar-v2";
+  schema.preferences.notifyCalendarReminders.notificationSources = ["calendar-v2"];
+  const { getNotificationTimeoutMs: getRenamedNotificationTimeoutMs } =
+    loadNotificationTimerWithSchema(schema);
+
+  assert.ok(
+    getRenamedNotificationTimeoutMs("calendar-v2") > 60 * 1000,
+    "the schema-derived calendar source must keep the reminder visible past the meeting start"
+  );
+  assert.equal(getRenamedNotificationTimeoutMs("calendar"), 30 * 1000);
 });
 
 test("fires exactly once after the configured duration", (t) => {

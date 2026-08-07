@@ -1,3 +1,5 @@
+const { NOTIFICATION_SOURCES } = require("./meetingNotificationPreferences");
+
 const DETECTION_TIMEOUT_MS = 30 * 1000;
 // Calendar reminders fire 60s before the meeting (MEETING_REMINDER_LEAD_MS in
 // calendarReminderScheduler.js); the prompt must survive past the meeting
@@ -9,7 +11,7 @@ const CALENDAR_TIMEOUT_MS = 2 * 60 * 1000;
 const MIN_RESUME_MS = 5 * 1000;
 
 function getNotificationTimeoutMs(source) {
-  return source === "calendar" ? CALENDAR_TIMEOUT_MS : DETECTION_TIMEOUT_MS;
+  return source === NOTIFICATION_SOURCES.CALENDAR ? CALENDAR_TIMEOUT_MS : DETECTION_TIMEOUT_MS;
 }
 
 // Auto-dismiss countdown for the meeting notification overlay, pausable while

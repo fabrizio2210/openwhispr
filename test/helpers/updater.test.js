@@ -6,6 +6,12 @@ const Module = require("node:module");
 process.env.NODE_ENV = "test";
 
 const updaterModulePath = require.resolve("../../src/updater.js");
+const updateCheckPolicyModulePath = require.resolve("../../src/helpers/updateCheckPolicy.js");
+const meetingNotificationPreferencesModulePath =
+  require.resolve("../../src/helpers/meetingNotificationPreferences.js");
+const notificationPreferenceSchemaModulePath =
+  require.resolve("../../src/config/notificationPreferencesSchema.json");
+const notificationPreferenceSchema = require(notificationPreferenceSchemaModulePath);
 const originalLoad = Module._load;
 
 const STARTUP_DELAY_MS = 3000;
@@ -37,12 +43,20 @@ function makeAutoUpdater({ offline = false } = {}) {
 
 // updater.js requires electron and child_process lazily (constructor, cleanup(),
 // Rosetta probe), so the mocks stay installed until afterEach.
-function createUpdateManager(autoUpdater) {
+function createUpdateManager(autoUpdater, { schema } = {}) {
   delete require.cache[updaterModulePath];
+  delete require.cache[updateCheckPolicyModulePath];
+  delete require.cache[meetingNotificationPreferencesModulePath];
   Module._load = function loadWithMocks(request, parent, isMain) {
     if (request === "electron-updater") return { autoUpdater };
     if (request === "electron") return { autoUpdater: { on() {}, removeListener() {} } };
     if (request === "child_process") return { execSync: () => "0" };
+    if (
+      schema &&
+      Module._resolveFilename(request, parent, isMain) === notificationPreferenceSchemaModulePath
+    ) {
+      return schema;
+    }
     return originalLoad.call(this, request, parent, isMain);
   };
   const UpdateManager = require(updaterModulePath);
@@ -82,6 +96,30 @@ test("with App updates off, startup and periodic checks never reach the update f
   assert.equal(autoUpdater.calls, 0, "startup check must be skipped");
   t.mock.timers.tick(PERIODIC_INTERVAL_MS);
   assert.equal(autoUpdater.calls, 0, "periodic check must be skipped");
+
+  manager.cleanup();
+});
+
+test("automatic checks follow an update preference renamed in the schema", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const schema = structuredClone(notificationPreferenceSchema);
+  const updateDefinition = schema.preferences.notifyUpdates;
+  delete schema.preferences.notifyUpdates;
+  schema.preferences.notifyUpdatesV2 = {
+    ...updateDefinition,
+    aliases: ["notifyUpdates", ...updateDefinition.aliases],
+  };
+  const autoUpdater = makeAutoUpdater();
+  const manager = createUpdateManager(autoUpdater, { schema });
+  manager.setWindowManager({
+    notificationPrefs: { notificationsEnabled: true, notifyUpdatesV2: false },
+  });
+
+  manager.checkForUpdatesOnStartup();
+  t.mock.timers.tick(STARTUP_DELAY_MS);
+  assert.equal(autoUpdater.calls, 0, "the schema-derived update gate must disable startup checks");
+  t.mock.timers.tick(PERIODIC_INTERVAL_MS);
+  assert.equal(autoUpdater.calls, 0, "the schema-derived update gate must disable periodic checks");
 
   manager.cleanup();
 });
@@ -134,6 +172,29 @@ test("before renderer prefs arrive, checks keep today's check-by-default behavio
   manager.checkForUpdatesOnStartup();
   t.mock.timers.tick(STARTUP_DELAY_MS);
   assert.equal(autoUpdater.calls, 1);
+
+  manager.cleanup();
+});
+
+test("automatic checks wait for explicit renderer preference synchronization", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const autoUpdater = makeAutoUpdater();
+  const manager = createUpdateManager(autoUpdater);
+  const windowManager = {
+    notificationPreferencesSynchronized: false,
+    notificationPrefs: { notificationsEnabled: true, notifyUpdates: true },
+  };
+  manager.setWindowManager(windowManager);
+
+  manager.checkForUpdatesOnStartup();
+  t.mock.timers.tick(STARTUP_DELAY_MS + PERIODIC_INTERVAL_MS);
+  assert.equal(autoUpdater.calls, 0, "no automatic timer runs against default preferences");
+
+  manager.handleNotificationPreferencesSynchronized();
+  t.mock.timers.tick(STARTUP_DELAY_MS);
+  assert.equal(autoUpdater.calls, 1, "startup check runs after synchronization");
+  t.mock.timers.tick(PERIODIC_INTERVAL_MS);
+  assert.equal(autoUpdater.calls, 2, "periodic checks are scheduled after synchronization");
 
   manager.cleanup();
 });
