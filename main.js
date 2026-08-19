@@ -25,6 +25,7 @@ const {
 const path = require("path");
 const http = require("http");
 const tls = require("tls");
+const { handleUncaughtException } = require("./src/utils/process");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
 
 // Extend Node's TLS trust with the OS store so ws and https.get see corporate
@@ -242,15 +243,7 @@ if (process.platform === "darwin" && app.getName() !== "OpenWhispr") {
 }
 
 // Add global error handling for uncaught exceptions
-process.on("uncaughtException", (error) => {
-  console.error("Uncaught Exception:", error);
-  // Don't exit the process for EPIPE errors as they're harmless
-  if (error.code === "EPIPE") {
-    return;
-  }
-  // For other errors, log and continue
-  console.error("Error stack:", error.stack);
-});
+process.on("uncaughtException", handleUncaughtException);
 
 process.on("unhandledRejection", (reason, promise) => {
   console.error("Unhandled Rejection at:", promise, "reason:", reason);

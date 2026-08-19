@@ -1,5 +1,19 @@
 const { spawn } = require("child_process");
 
+const IGNORED_OUTPUT_ERROR_CODES = new Set(["EIO", "EPIPE"]);
+const OUTPUT_WRITE_SYSCALLS = new Set(["write", "writev"]);
+
+function isIgnorableOutputError(error) {
+  return IGNORED_OUTPUT_ERROR_CODES.has(error?.code) && OUTPUT_WRITE_SYSCALLS.has(error?.syscall);
+}
+
+function handleUncaughtException(error, _origin, logger = console) {
+  if (isIgnorableOutputError(error)) return;
+
+  logger.error("Uncaught Exception:", error);
+  logger.error("Error stack:", error?.stack);
+}
+
 /**
  * Cross-platform process termination
  * Windows doesn't support SIGTERM/SIGKILL signals the same way Unix does
@@ -155,6 +169,8 @@ async function runCommand(cmd, args = [], options = {}) {
 }
 
 module.exports = {
+  handleUncaughtException,
+  isIgnorableOutputError,
   runCommand,
   killProcess,
   killProcessGroup,
