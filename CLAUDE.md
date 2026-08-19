@@ -124,7 +124,7 @@ OpenWhispr is an Electron-based desktop dictation application that uses whisper.
   - Priority-based coalescing (process > audio) — one notification, not three
 - **linuxOutlookNotificationMonitor.js**: Captures meeting-title context from Outlook Web reminders on KDE
   - Monitors local `org.freedesktop.Notifications.Notify` and portal `AddNotification` calls only while meeting detection is enabled
-  - Accepts Microsoft Edge notifications from `outlook.office.com` when the body contains a standalone meeting start time; portal messages also require positive Edge + Outlook attribution
+  - Accepts Microsoft Edge notifications from the exact origins `outlook.office.com` and `outlook.cloud.microsoft` when the body contains a standalone meeting start time; portal messages also require positive Edge + Outlook attribution
   - Keeps up to 10 sanitized, in-memory candidates; accepted candidates are consumed after a meeting note is created
   - Reconnects after system resume and emits privacy-safe matching diagnostics without title or body content
 - **meetingProcessDetector.js**: Detects running meeting apps
@@ -628,7 +628,7 @@ Detects meetings via three independent signal sources, orchestrated by
 **Outlook Web Notification Context** (Linux + KDE, Microsoft Edge):
 
 - A raw session D-Bus monitor observes direct `org.freedesktop.Notifications.Notify` and portal `org.freedesktop.portal.Notification.AddNotification` calls
-- Direct messages must identify Microsoft Edge and the exact KDE origin `outlook.office.com`; portal messages are accepted only when they positively expose the same Edge + Outlook attribution
+- Direct messages must identify Microsoft Edge and one of the exact KDE origins `outlook.office.com` or `outlook.cloud.microsoft`; portal messages are accepted only when they positively expose the same Edge + Outlook attribution
 - A reminder is cached only when its body contains a standalone start time (for example, `16:00` or `Starts at 16:00`); the first valid time is resolved to the nearest local day
 - Titles are sanitized, truncated to 200 characters, held only in memory, and matched from 30 minutes before until 60 minutes after the scheduled time
 - Started events take precedence over upcoming events; the newest displayed reminder wins among started events, while the nearest event wins when all candidates are upcoming

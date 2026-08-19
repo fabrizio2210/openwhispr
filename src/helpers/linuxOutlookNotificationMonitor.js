@@ -12,6 +12,8 @@ const PORTAL_INTERFACE = "org.freedesktop.portal.Notification";
 const EDGE_APP_NAME = "Microsoft Edge";
 const EDGE_DESKTOP_ENTRY = "microsoft-edge";
 const OUTLOOK_ORIGIN = "outlook.office.com";
+const OUTLOOK_CLOUD_ORIGIN = "outlook.cloud.microsoft";
+const OUTLOOK_ORIGINS = new Set([OUTLOOK_ORIGIN, OUTLOOK_CLOUD_ORIGIN]);
 const NOTIFY_SIGNATURE = "susssasa{sv}i";
 const PORTAL_ADD_SIGNATURE = "sa{sv}";
 const METHOD_CALL = 1;
@@ -357,7 +359,7 @@ function inspectOutlookNotificationMessage(message, receivedAt) {
       hasBody: typeof rawTime === "string",
       hasRecognizedStartTime: scheduledAt !== null,
       hasEdgeDesktopEntry: getDictValue(hints, "desktop-entry") === EDGE_DESKTOP_ENTRY,
-      hasOutlookOrigin: getDictValue(hints, "x-kde-origin-name") === OUTLOOK_ORIGIN,
+      hasOutlookOrigin: OUTLOOK_ORIGINS.has(getDictValue(hints, "x-kde-origin-name")),
     };
 
     if (appName !== EDGE_APP_NAME) {
@@ -412,7 +414,7 @@ function inspectOutlookNotificationMessage(message, receivedAt) {
     hasBody: rawBodies.length > 0,
     hasRecognizedStartTime: scheduledAt !== null,
     hasEdgeDesktopEntry: getDictValue(notification, "desktop-entry") === EDGE_DESKTOP_ENTRY,
-    hasOutlookOrigin: getDictValue(notification, "x-kde-origin-name") === OUTLOOK_ORIGIN,
+    hasOutlookOrigin: OUTLOOK_ORIGINS.has(getDictValue(notification, "x-kde-origin-name")),
     unknownFieldCount: fieldNames.filter((key) => !PORTAL_KNOWN_FIELDS.has(key)).length,
   };
 
