@@ -115,6 +115,36 @@ test("parses the observed KDE Outlook notification shape", () => {
   });
 });
 
+test("accepts Outlook reminders from the current Microsoft cloud origin", () => {
+  const receivedAt = new Date(2026, 7, 19, 10, 10).getTime();
+  const expected = {
+    title: "Test meeting",
+    scheduledAt: new Date(2026, 7, 19, 10, 15).getTime(),
+    receivedAt,
+    source: "outlook-notification",
+    transport: "freedesktop",
+  };
+
+  assert.deepEqual(
+    parseOutlookNotificationMessage(
+      notificationMessage({ origin: "outlook.cloud.microsoft", body: "10:15 " }),
+      receivedAt
+    ),
+    expected
+  );
+  assert.deepEqual(
+    parseOutlookNotificationMessage(
+      portalNotificationMessage({
+        body: "10:15 ",
+        desktopEntry: "microsoft-edge",
+        origin: "outlook.cloud.microsoft",
+      }),
+      receivedAt
+    ),
+    { ...expected, transport: "portal" }
+  );
+});
+
 test("rejects other apps, origins, and non-calendar Outlook notifications", () => {
   const receivedAt = new Date(2026, 6, 27, 15, 55).getTime();
   assert.equal(
@@ -124,6 +154,23 @@ test("rejects other apps, origins, and non-calendar Outlook notifications", () =
   assert.equal(
     parseOutlookNotificationMessage(
       notificationMessage({ origin: "mail.example.com" }),
+      receivedAt
+    ),
+    null
+  );
+  assert.equal(
+    parseOutlookNotificationMessage(
+      notificationMessage({ origin: "outlook.cloud.microsoft.example.com" }),
+      receivedAt
+    ),
+    null
+  );
+  assert.equal(
+    parseOutlookNotificationMessage(
+      portalNotificationMessage({
+        desktopEntry: "microsoft-edge",
+        origin: "outlook.cloud.microsoft.example.com",
+      }),
       receivedAt
     ),
     null

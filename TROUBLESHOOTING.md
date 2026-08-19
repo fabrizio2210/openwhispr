@@ -152,9 +152,10 @@ OpenWhispr can use an Outlook Web reminder from Microsoft Edge as local title
 context without connecting to Microsoft Graph. Enable Outlook Web desktop
 notifications and keep OpenWhispr running when the reminder appears. While
 meeting-detection notifications are enabled, OpenWhispr watches the local KDE
-notification call, accepts reminders from `outlook.office.com` whose body is
-a standalone meeting start time (such as `16:00`, `Starts at 16:00`, or a time
-range beginning with `16:00`), and keeps the sanitized title in memory.
+notification call and accepts reminders from the exact Outlook origins
+`outlook.office.com` and `outlook.cloud.microsoft` whose body is a standalone
+meeting start time (such as `16:00`, `Starts at 16:00`, or a time range
+beginning with `16:00`), and keeps the sanitized title in memory.
 
 The title can be used from 30 minutes before until 60 minutes after the reminder's
 scheduled time. A meeting that has already started takes precedence over an
