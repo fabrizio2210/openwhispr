@@ -16,6 +16,36 @@ const INACTIVE_RESET_MS = 60 * 1000;
 // cork/volume churn, and every reconcile forks a pactl subprocess.
 const LINUX_RECONCILE_MIN_SPACING_MS = 1000;
 const EXEC_OPTS = { timeout: 5000, encoding: "utf8" };
+const PIPEWIRE_EXEC_OPTS = { ...EXEC_OPTS, maxBuffer: 4 * 1024 * 1024 };
+
+function getPipeWireInputActivity(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+
+  let objects;
+  try {
+    objects = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(objects)) return null;
+
+  let hasUnknownInputState = false;
+  for (const object of objects) {
+    if (
+      object?.type !== "PipeWire:Interface:Node" ||
+      object?.info?.props?.["media.class"] !== "Stream/Input/Audio"
+    ) {
+      continue;
+    }
+
+    if (object.info.state === "running") return true;
+    if (object.info.state !== "idle" && object.info.state !== "suspended") {
+      hasUnknownInputState = true;
+    }
+  }
+
+  return hasUnknownInputState ? null : false;
+}
 
 class AudioActivityDetector extends EventEmitter {
   // `getExcludedProcessIds` lists every pid whose mic use is OpenWhispr's own:
@@ -900,11 +930,8 @@ class AudioActivityDetector extends EventEmitter {
     }
 
     try {
-      const { stdout } = await execAsync(
-        "pw-cli list-objects | grep -c 'Stream/Input/Audio'",
-        EXEC_OPTS
-      );
-      return parseInt(stdout.trim(), 10) > 0;
+      const { stdout } = await execAsync("pw-dump", PIPEWIRE_EXEC_OPTS);
+      return getPipeWireInputActivity(stdout) === true;
     } catch {
       return false;
     }
@@ -912,3 +939,4 @@ class AudioActivityDetector extends EventEmitter {
 }
 
 module.exports = AudioActivityDetector;
+module.exports.getPipeWireInputActivity = getPipeWireInputActivity;

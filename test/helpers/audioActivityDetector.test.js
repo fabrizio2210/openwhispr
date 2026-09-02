@@ -12,6 +12,17 @@ const detectorModulePath = require.resolve("../../src/helpers/audioActivityDetec
 const originalLoad = Module._load;
 const originalPlatform = process.platform;
 
+function pipeWireNode({ state, mediaClass = "Stream/Input/Audio" }) {
+  return {
+    id: 42,
+    type: "PipeWire:Interface:Node",
+    info: {
+      state,
+      props: { "media.class": mediaClass },
+    },
+  };
+}
+
 // The detector reads process.platform both at load time (poll interval) and at
 // start() time (listener selection), so it stays pinned for the whole test.
 function setPlatform(platform) {
@@ -1020,6 +1031,53 @@ test("linux: polling reports only external capture as mic activity", async () =>
 
   assert.equal(await detector._checkLinux(), false);
   assert.equal(await detector._checkLinux(), true);
+});
+
+test("linux: PipeWire fallback counts only running microphone input streams", () => {
+  const AudioActivityDetector = loadDetector(
+    "linux",
+    () => {},
+    () => {}
+  );
+  const { getPipeWireInputActivity } = AudioActivityDetector;
+
+  assert.equal(
+    getPipeWireInputActivity(JSON.stringify([pipeWireNode({ state: "running" })])),
+    true
+  );
+  assert.equal(getPipeWireInputActivity(JSON.stringify([pipeWireNode({ state: "idle" })])), false);
+  assert.equal(
+    getPipeWireInputActivity(JSON.stringify([pipeWireNode({ state: "suspended" })])),
+    false
+  );
+  assert.equal(
+    getPipeWireInputActivity(
+      JSON.stringify([pipeWireNode({ state: "running", mediaClass: "Audio/Source" })])
+    ),
+    false
+  );
+  assert.equal(getPipeWireInputActivity("not JSON"), null);
+  assert.equal(
+    getPipeWireInputActivity(JSON.stringify([pipeWireNode({ state: undefined })])),
+    null
+  );
+});
+
+test("linux: polling uses pw-dump when pactl is unavailable", async () => {
+  const { detector, execCalls } = createDetector("linux", {
+    execResponses: [
+      { error: new Error("pactl unavailable") },
+      { error: new Error("pactl unavailable") },
+      { stdout: JSON.stringify([pipeWireNode({ state: "running" })]) },
+    ],
+  });
+
+  assert.equal(await detector._checkLinux(), true);
+  assert.deepEqual(
+    execCalls.map((call) => call.command),
+    ["pactl --format=json list source-outputs", "pactl list source-outputs short", "pw-dump"]
+  );
+  assert.equal(execCalls.at(-1).options.maxBuffer, 4 * 1024 * 1024);
 });
 
 test("linux: a capture pid swapped inside one reconcile does not re-prompt", async (t) => {
