@@ -262,7 +262,7 @@ class AudioActivityDetector extends EventEmitter {
   }
 
   _startResetTimer() {
-    this._clearResetTimer();
+    if (this._resetTimer) return;
     this._resetTimer = setTimeout(() => {
       this._resetTimer = null;
       this.hasPrompted = false;

@@ -765,9 +765,34 @@ test("win32: portable native state seam handles reference counts and failures", 
 // The native listeners are edge-triggered: they emit only on state transitions,
 // so an edge swallowed by a gate is never re-delivered. The detector must
 // remember the last known state and re-evaluate it when the gate lifts.
-// Mirrors SUSTAINED_EVENT_DRIVEN_MS and COOLDOWN_MS in audioActivityDetector.js.
+// Mirrors detector timing constants in audioActivityDetector.js.
 const SUSTAINED_MS = 2 * 1000;
 const COOLDOWN_MS = 5 * 60 * 1000;
+const INACTIVE_RESET_MS = 60 * 1000;
+
+test("polling re-arms after sustained inactivity despite repeated checks", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 10_000 });
+  const { detector } = createDetector("linux");
+  const emitted = [];
+  detector.on("sustained-audio-detected", (data) => emitted.push(data));
+
+  detector.hasPrompted = true;
+  detector._isMicActive = async () => false;
+  await detector._check();
+  const resetTimer = detector._resetTimer;
+
+  t.mock.timers.tick(3_000);
+  await detector._check();
+  assert.equal(detector._resetTimer, resetTimer, "inactive polls must share one reset timer");
+
+  t.mock.timers.tick(INACTIVE_RESET_MS - 3_000);
+  assert.equal(detector.hasPrompted, false, "sustained inactivity must re-arm detection");
+
+  detector._isMicActive = async () => true;
+  await detector._check();
+  await detector._check();
+  assert.equal(emitted.length, 1, "the next sustained capture must produce a detection");
+});
 
 test("darwin: a mic edge swallowed by the recording gate is re-evaluated when recording stops", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 10_000 });
